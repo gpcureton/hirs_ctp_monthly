@@ -25,7 +25,7 @@ class HIRS_CTP_MONTHLY(Computation):
                                                         context['ctp_version'], interval)
 
         for (i, c) in enumerate(daily_contexts):
-            task.input('CTPD-{}'.format(i), HIRS_CTP_DAILY().dataset('out').product(c))
+            task.input('CTPD-{}'.format(i), HIRS_CTP_DAILY().dataset('out').product(c), True)
 
     def run_task(self, inputs, context):
 
