@@ -16,6 +16,7 @@ import shutil
 from calendar import monthrange
 import logging
 import traceback
+from subprocess import CalledProcessError
 
 from flo.computation import Computation
 from flo.builder import WorkflowNotReady
@@ -27,9 +28,9 @@ import sipsprod
 from glutil import (
     check_call,
     dawg_catalog,
-    #delivered_software,
+    delivered_software,
     #support_software,
-    #runscript,
+    runscript,
     #prepare_env,
     #nc_gen,
     nc_compress,
@@ -47,63 +48,16 @@ LOG = logging.getLogger(__name__)
 
 class HIRS_CTP_MONTHLY(Computation):
 
-    parameters = ['granule', 'sat', 'hirs_version', 'collo_version', 'csrb_version', 'ctp_version']
+    parameters = ['granule', 'satellite', 'hirs2nc_delivery_id', 'hirs_avhrr_delivery_id',
+                  'hirs_csrb_daily_delivery_id', 'hirs_csrb_monthly_delivery_id',
+                  'hirs_ctp_orbital_delivery_id', 'hirs_ctp_daily_delivery_id',
+                  'hirs_ctp_monthly_delivery_id']
     outputs = ['out']
 
-    @reraise_as(WorkflowNotReady, FileNotFound, prefix='HIRS_CTP_MONTHLY')
-    def build_task(self, context, task):
-        '''
-        Build up a set of inputs for a single context
-        '''
-        LOG.debug("Running build_task()")
-        LOG.debug("context:  {}".format(context))
-
-        # Instantiate the hirs_csrb_daily computation
-        hirs_ctp_daily_comp = hirs_ctp_daily.HIRS_CTP_DAILY()
-
-        num_days = monthrange(context['granule'].year, context['granule'].month)[1]
-        interval = TimeInterval(context['granule'], context['granule'] + timedelta(num_days),
-                                False, True)
-
-        daily_contexts = hirs_ctp_daily_comp.find_contexts(
-                                                        interval,
-                                                        context['sat'],
-                                                        context['hirs_version'],
-                                                        context['collo_version'],
-                                                        context['csrb_version'],
-                                                        context['ctp_version'])
-
-        if len(daily_contexts) == 0:
-            raise WorkflowNotReady('No HIRS_CTP_DAILY inputs available for {}'.format(context['granule']))
-
-        for (i, daily_context) in enumerate(daily_contexts):
-            hirs_ctp_daily_prod = hirs_ctp_daily_comp.dataset('out').product(daily_context)
-            if SPC.exists(hirs_ctp_daily_prod):
-                task.input('CTPD-{}'.format(i), hirs_ctp_daily_prod, True)
-
-    @reraise_as(WorkflowNotReady, FileNotFound, prefix='HIRS_CTP_MONTHLY')
-    def run_task(self, inputs, context):
-
-        inputs = symlink_inputs_to_working_dir(inputs)
-        lib_dir = os.path.join(self.package_root, context['ctp_version'], 'lib')
-
-        output = 'ctp.monthly.{}.{}.nc'.format(context['sat'], context['granule'].strftime('d%Y%m'))
-
-        # Generate CTP Daily Input List
-        ctp_daily_file = 'ctp_daily_list'
-        with open(ctp_daily_file, 'w') as f:
-            [f.write('{}\n'.format(input)) for input in inputs.values()]
-
-        cmd = os.path.join(self.package_root, context['ctp_version'],
-                           'bin/create_monthly_daynight_ctps.exe')
-        cmd += ' {} {}'.format(ctp_daily_file, output)
-
-        print cmd
-        check_call(cmd, shell=True, env=augmented_env({'LD_LIBRARY_PATH': lib_dir}))
-
-        return {'out': output}
-
-    def find_contexts(self, time_interval, sat, hirs_version, collo_version, csrb_version, ctp_version):
+    def find_contexts(self, time_interval, satellite, hirs2nc_delivery_id, hirs_avhrr_delivery_id,
+                      hirs_csrb_daily_delivery_id, hirs_csrb_monthly_delivery_id,
+                      hirs_ctp_orbital_delivery_id, hirs_ctp_daily_delivery_id,
+                      hirs_ctp_monthly_delivery_id):
 
         granules = []
 
@@ -116,15 +70,122 @@ class HIRS_CTP_MONTHLY(Computation):
             date = date + timedelta(days=monthrange(date.year, date.month)[1])
 
         return [{'granule': g,
-                 'sat': sat,
-                 'hirs_version': hirs_version,
-                 'collo_version': collo_version,
-                 'csrb_version': csrb_version,
-                 'ctp_version': ctp_version}
+                 'satellite': satellite,
+                 'hirs2nc_delivery_id': hirs2nc_delivery_id,
+                 'hirs_avhrr_delivery_id': hirs_avhrr_delivery_id,
+                 'hirs_csrb_daily_delivery_id': hirs_csrb_daily_delivery_id,
+                 'hirs_csrb_monthly_delivery_id': hirs_csrb_monthly_delivery_id,
+                 'hirs_ctp_orbital_delivery_id': hirs_ctp_orbital_delivery_id,
+                 'hirs_ctp_daily_delivery_id': hirs_ctp_daily_delivery_id,
+                 'hirs_ctp_monthly_delivery_id': hirs_ctp_monthly_delivery_id}
                 for g in granules]
 
-    def context_path(self, context, output):
+    @reraise_as(WorkflowNotReady, FileNotFound, prefix='HIRS_CTP_MONTHLY')
+    def build_task(self, context, task):
+        '''
+        Build up a set of inputs for a single context
+        '''
 
-        return os.path.join('HIRS',
-                            '{}/{}'.format(context['sat'], context['granule'].year),
-                            'CTP_MONTHLY')
+        LOG.debug("Running build_task()")
+
+        # Instantiate the hirs_ctp_daily computation
+        hirs_ctp_daily_comp = hirs_ctp_daily.HIRS_CTP_DAILY()
+
+        num_days = monthrange(context['granule'].year, context['granule'].month)[1]
+        interval = TimeInterval(context['granule'], context['granule'] + timedelta(num_days),
+                                False, True)
+
+        daily_contexts = hirs_ctp_daily_comp.find_contexts(
+                                                        interval,
+                                                        context['satellite'],
+                                                        context['hirs2nc_delivery_id'],
+                                                        context['hirs_avhrr_delivery_id'],
+                                                        context['hirs_csrb_daily_delivery_id'],
+                                                        context['hirs_csrb_monthly_delivery_id'],
+                                                        context['hirs_ctp_orbital_delivery_id'],
+                                                        context['hirs_ctp_daily_delivery_id'])
+
+        if len(daily_contexts) == 0:
+            raise WorkflowNotReady('No HIRS_CTP_DAILY inputs available for {}'.format(context['granule']))
+
+        for (idx, daily_context) in enumerate(daily_contexts):
+            hirs_ctp_daily_prod = hirs_ctp_daily_comp.dataset('out').product(daily_context)
+            if SPC.exists(hirs_ctp_daily_prod):
+                task.input('CTPD-{}'.format(idx), hirs_ctp_daily_prod, True)
+
+    def create_ctp_monthly(self, inputs, context):
+        '''
+        Create the CTP monthly mean current month.
+        '''
+
+        rc = 0
+
+        # Create the output directory
+        current_dir = os.getcwd()
+
+        # Get the required CTP script locations
+        hirs_ctp_monthly_delivery_id = context['hirs_ctp_monthly_delivery_id']
+        delivery = delivered_software.lookup('hirs_ctp_monthly', delivery_id=hirs_ctp_monthly_delivery_id)
+        dist_root = pjoin(delivery.path, 'dist')
+        version = delivery.version
+
+        # Determine the output filenames
+        output_file = 'hirs_ctp_monthly_{}_{}.nc'.format(context['satellite'],
+                                                       context['granule'].strftime('D%Y%m'))
+        LOG.info("output_file: {}".format(output_file))
+
+        # Generating CTP Daily Input List
+        ctp_daily_file = 'ctp_daily_list'
+        with open(ctp_daily_file, 'w') as f:
+            [f.write('{}\n'.format(basename(input))) for input in inputs.values()]
+
+        # Run the CTP monthly binary
+        ctp_monthly_bin = pjoin(dist_root, 'bin/create_monthly_daynight_ctps.exe')
+        cmd = '{} {} {}'.format(
+                ctp_monthly_bin,
+                ctp_daily_file,
+                output_file
+                )
+        #cmd = 'sleep 0.5; touch {}'.format(output_file)
+
+        try:
+            LOG.debug("cmd = \\\n\t{}".format(cmd.replace(' ',' \\\n\t')))
+            rc_ctp = 0
+            runscript(cmd, [delivery])
+        except CalledProcessError as err:
+            rc_ctp = err.returncode
+            LOG.error(" CTP monthly binary {} returned a value of {}".format(ctp_monthly_bin, rc_ctp))
+            return rc_ctp, None
+
+        # Verify output file
+        output_file = glob(output_file)
+        if len(output_file) != 0:
+            output_file = output_file[0]
+            LOG.debug('Found output CTP monthly file "{}"'.format(output_file))
+        else:
+            LOG.error('Failed to generate "{}", aborting'.format(output_file))
+            rc = 1
+            return rc, None
+
+        return rc, output_file
+
+    @reraise_as(WorkflowNotReady, FileNotFound, prefix='HIRS_CTP_MONTHLY')
+    def run_task(self, inputs, context):
+        '''
+        Run the CTP monthly binary on a single context
+        '''
+
+        LOG.debug("Running run_task()...")
+
+        for key in context.keys():
+            LOG.debug("run_task() context['{}'] = {}".format(key, context[key]))
+
+        rc = 0
+
+        # Link the inputs into the working directory
+        inputs = symlink_inputs_to_working_dir(inputs)
+
+        # Create the CTP monthly file for the current month.
+        rc, ctp_monthly_file = self.create_ctp_monthly(inputs, context)
+
+        return {'out': nc_compress(ctp_monthly_file)}
